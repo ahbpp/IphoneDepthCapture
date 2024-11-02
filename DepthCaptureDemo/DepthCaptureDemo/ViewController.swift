@@ -16,17 +16,23 @@ extension UIImage {
     }
 }
 
-class ViewController: UIViewController, AVCapturePhotoCaptureDelegate {
+class ViewController: UIViewController, AVCapturePhotoCaptureDelegate, UITextFieldDelegate {
 
     // UI elements
     var captureButton: UIButton!
     var imageView: UIImageView!
+    var objectNameTextField: UITextField! // New text field for object name
 
     // Capture session and outputs
     var captureSession: AVCaptureSession!
     var depthDataOutput: AVCaptureDepthDataOutput!
     var photoOutput: AVCapturePhotoOutput!
     var previewLayer: AVCaptureVideoPreviewLayer!
+    let cameraCapturedDataSaver = CameraCapturedDataSaver()
+    
+    // Variables for managing capture
+       var captureCounter = 0 // Counter for number of images taken for the object
+
 
     override func viewDidLoad() {
         super.viewDidLoad()
@@ -34,9 +40,23 @@ class ViewController: UIViewController, AVCapturePhotoCaptureDelegate {
         // Set up UI components
         setupUI()
         checkPermissionsAndSetupSession()
+        
+        
+        // Add tap gesture recognizer to dismiss keyboard
+        let tapGesture = UITapGestureRecognizer(target: self, action: #selector(dismissKeyboard))
+        view.addGestureRecognizer(tapGesture)
+        
+        // Set the text field delegate
+        objectNameTextField.delegate = self
     }
 
     func setupUI() {
+        // Set up object name text field
+         objectNameTextField = UITextField(frame: CGRect(x: 20, y: 50, width: 200, height: 40))
+         objectNameTextField.placeholder = "Enter Object Name"
+         objectNameTextField.borderStyle = .roundedRect
+         view.addSubview(objectNameTextField)
+        
         // Set up image view
         imageView = UIImageView(frame: view.bounds)
         imageView.contentMode = .scaleAspectFit
@@ -155,28 +175,41 @@ class ViewController: UIViewController, AVCapturePhotoCaptureDelegate {
     }
     
     func photoOutput(_ output: AVCapturePhotoOutput, didFinishProcessingPhoto photo: AVCapturePhoto, error: Error?) {
-        guard error == nil else {
+        guard let pixelBuffer = photo.pixelBuffer, let depthData = photo.depthData, error == nil else {
             print("Error capturing photo: \(String(describing: error))")
             return
         }
         
-        // Retrieve color image
-        if let pixelBuffer = photo.pixelBuffer {
-            let ciImage = CIImage(cvPixelBuffer: pixelBuffer)
-            let colorImage = UIImage(ciImage: ciImage)
-            
-            // Process depth data and combine with color image
-            if let depthData = photo.depthData {
-                printCalibrationData(from: depthData)
-                handleDepthData(depthData, colorImage: colorImage)
-            } else {
-                print("No depth data in photo")
-                imageView.image = colorImage.withOrientation(.right) // Display color image alone if no depth data
-            }
-        }
+        captureCounter += 1
+        
+        let cameraCaptureData = createCameraCapturedData(pixelBuffer: pixelBuffer, depthData: depthData)
+        
+        // Define folder path and prefix
+        let objectName = objectNameTextField.text?.isEmpty == true ? "DefaultObject" : objectNameTextField.text!
+        let filePath = getObjectFolderPath(folderName: objectName)
+        let prefix = "fram_\(captureCounter)"
+        cameraCapturedDataSaver.save(data: cameraCaptureData, to: filePath, withPrefix: prefix)
+        
+        
+        
+//        let colorImage = cameraCaptureData.colorImage!
+//        let depthImage = cameraCaptureData.depthImage!
+//        // Combine color and depth images
+//        UIGraphicsBeginImageContext(colorImage.size)
+//        colorImage.draw(in: CGRect(origin: .zero, size: colorImage.size))
+//        depthImage.draw(in: CGRect(origin: .zero, size: colorImage.size), blendMode: .overlay, alpha: 0.8)
+//        let combinedImage = UIGraphicsGetImageFromCurrentImageContext()
+//        UIGraphicsEndImageContext()
+//        
+//        // Display combined image
+//        imageView.image = combinedImage?.withOrientation(.right)
     }
 
-    func handleDepthData(_ depthData: AVDepthData, colorImage: UIImage) {
+    private func createCameraCapturedData(pixelBuffer: CVPixelBuffer, depthData: AVDepthData) -> CameraCapturedData {
+        
+        let ciImage = CIImage(cvPixelBuffer: pixelBuffer)
+        let colorImage = UIImage(ciImage: ciImage)
+        
         // Convert depth data and lock buffer
         let depthMap = depthData.converting(toDepthDataType: kCVPixelFormatType_DepthFloat32).depthDataMap
         CVPixelBufferLockBaseAddress(depthMap, .readOnly)
@@ -185,10 +218,7 @@ class ViewController: UIViewController, AVCapturePhotoCaptureDelegate {
         // Get depth dimensions and pointer
         let width = CVPixelBufferGetWidth(depthMap)
         let height = CVPixelBufferGetHeight(depthMap)
-        guard let depthPointer = CVPixelBufferGetBaseAddress(depthMap)?.assumingMemoryBound(to: Float32.self) else {
-            print("Failed to get depth data pointer.")
-            return
-        }
+        let depthPointer = CVPixelBufferGetBaseAddress(depthMap)!.assumingMemoryBound(to: Float32.self)
         
         // Calculate min and max depth values, ignoring non-finite values
         var minDepth: Float = .greatestFiniteMagnitude
@@ -199,13 +229,6 @@ class ViewController: UIViewController, AVCapturePhotoCaptureDelegate {
                 minDepth = min(minDepth, depthValue)
                 maxDepth = max(maxDepth, depthValue)
             }
-        }
-        
-        // Check for valid depth range
-        guard minDepth < maxDepth else {
-            print("No valid depth data found.")
-            imageView.image = colorImage
-            return
         }
         
         // Normalize depth values to grayscale
@@ -224,37 +247,67 @@ class ViewController: UIViewController, AVCapturePhotoCaptureDelegate {
         // Create grayscale UIImage from depth data
         let colorSpace = CGColorSpaceCreateDeviceGray()
         let bitmapInfo = CGBitmapInfo(rawValue: CGImageAlphaInfo.none.rawValue)
-        guard let provider = CGDataProvider(data: Data(depthPixels) as CFData),
-              let depthCGImage = CGImage(width: width, height: height, bitsPerComponent: 8, bitsPerPixel: 8, bytesPerRow: width, space: colorSpace, bitmapInfo: bitmapInfo, provider: provider, decode: nil, shouldInterpolate: false, intent: .defaultIntent) else {
-            print("Failed to create CGImage from depth data.")
-            return
-        }
+        let provider = CGDataProvider(data: Data(depthPixels) as CFData)!
+        let cgDepthImage = CGImage(width: width, height: height, bitsPerComponent: 8, bitsPerPixel: 8, bytesPerRow: width, space: colorSpace, bitmapInfo: bitmapInfo, provider: provider, decode: nil, shouldInterpolate: false, intent: .defaultIntent)!
         
-        let depthImage = UIImage(cgImage: depthCGImage)
         
-        // Combine color and depth images
-        UIGraphicsBeginImageContext(colorImage.size)
-        colorImage.draw(in: CGRect(origin: .zero, size: colorImage.size))
-        depthImage.draw(in: CGRect(origin: .zero, size: colorImage.size), blendMode: .overlay, alpha: 0.8)
-        let combinedImage = UIGraphicsGetImageFromCurrentImageContext()
-        UIGraphicsEndImageContext()
+        let cameraCalibrationData = depthData.cameraCalibrationData!
         
-        // Display combined image
-        imageView.image = combinedImage?.withOrientation(.right)
+        let data = CameraCapturedData(colorImage: colorImage.withOrientation(.right),
+                                      depthImage: UIImage(cgImage: cgDepthImage).withOrientation(.right),
+                                      minDepth: minDepth,
+                                      maxDepth: maxDepth,
+                                      cameraIntrinsics: cameraCalibrationData.intrinsicMatrix,
+                                      cameraReferenceDimensions: cameraCalibrationData.intrinsicMatrixReferenceDimensions)
+        return data
     }
     
-    func printCalibrationData(from depthData: AVDepthData) {
-        guard let calibrationData = depthData.cameraCalibrationData else {
-            print("No camera calibration data available.")
-            return
+    func getICloudDirectory() -> URL? {
+        // Retrieve the iCloud container
+        if let iCloudURL = FileManager.default.url(forUbiquityContainerIdentifier: nil) {
+            let appDirectory = iCloudURL.appendingPathComponent("Documents/SavedCaptures")
+            
+            // Create the directory if it doesn't exist
+            if !FileManager.default.fileExists(atPath: appDirectory.path) {
+                do {
+                    try FileManager.default.createDirectory(at: appDirectory, withIntermediateDirectories: true)
+                } catch {
+                    print("Failed to create iCloud directory: \(error)")
+                    return nil
+                }
+            }
+            return appDirectory
+        } else {
+            print("iCloud is not available.")
+            return nil
+        }
+    }
+    
+    private func getObjectFolderPath(folderName: String) -> URL {
+        let documentsDirectory = FileManager.default.urls(for: .documentDirectory, in: .userDomainMask)[0]
+        let folderURL = documentsDirectory.appendingPathComponent(folderName)
+        
+        // Create folder if it doesn't exist
+        if !FileManager.default.fileExists(atPath: folderURL.path) {
+            do {
+                try FileManager.default.createDirectory(at: folderURL, withIntermediateDirectories: true)
+            } catch {
+                print("Failed to create object folder: \(error)")
+            }
         }
         
-        print("Camera Calibration Data:")
-        print("Intrinsic Matrix: \(calibrationData.intrinsicMatrix)")
-        print("Reference Dimensions: \(calibrationData.intrinsicMatrixReferenceDimensions)")
-        print("Focal Length X: \(calibrationData.intrinsicMatrix[0, 0])")
-        print("Focal Length Y: \(calibrationData.intrinsicMatrix[1, 1])")
-        print("Principal Point X: \(calibrationData.intrinsicMatrix[2, 0])")
-        print("Principal Point Y: \(calibrationData.intrinsicMatrix[2, 1])")
+        return folderURL
+    }
+    
+    
+    // Dismiss the keyboard when tapping outside the text field
+    @objc func dismissKeyboard() {
+        view.endEditing(true)
+    }
+    
+    // UITextFieldDelegate method to dismiss keyboard on return key
+    func textFieldShouldReturn(_ textField: UITextField) -> Bool {
+        textField.resignFirstResponder()
+        return true
     }
 }
