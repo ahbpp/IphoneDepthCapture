@@ -21,22 +21,24 @@ class ViewController: UIViewController, AVCapturePhotoCaptureDelegate, UITextFie
     // UI elements
     var captureButton: UIButton!
     var imageView: UIImageView!
-    var objectNameTextField: UITextField! // New text field for object name
-
+    var objectNameTextField: UITextField!
+    var topFrameView: UIView!
+    var bottomFrameView: UIView!
+    
     // Capture session and outputs
     var captureSession: AVCaptureSession!
     var depthDataOutput: AVCaptureDepthDataOutput!
     var photoOutput: AVCapturePhotoOutput!
     var previewLayer: AVCaptureVideoPreviewLayer!
+    let cameraMotion = CameraMotion()
     let cameraCapturedDataSaver = CameraCapturedDataSaver()
     
-    // Variables for managing capture
-       var captureCounter = 0 // Counter for number of images taken for the object
 
 
     override func viewDidLoad() {
         super.viewDidLoad()
-
+        
+        cameraMotion.startTracking() // Start motion tracking
         // Set up UI components
         setupUI()
         checkPermissionsAndSetupSession()
@@ -51,29 +53,101 @@ class ViewController: UIViewController, AVCapturePhotoCaptureDelegate, UITextFie
     }
 
     func setupUI() {
-        // Set up object name text field
-         objectNameTextField = UITextField(frame: CGRect(x: 20, y: 50, width: 200, height: 40))
-         objectNameTextField.placeholder = "Enter Object Name"
-         objectNameTextField.borderStyle = .roundedRect
-         view.addSubview(objectNameTextField)
-        
-        // Set up image view
+
+        // Set up top frame view
+        topFrameView = UIView()
+        topFrameView.backgroundColor = UIColor.black.withAlphaComponent(0.4)
+        topFrameView.translatesAutoresizingMaskIntoConstraints = false
+        view.addSubview(topFrameView)
+
+        // Set up bottom frame view
+        bottomFrameView = UIView()
+        bottomFrameView.backgroundColor = UIColor.black.withAlphaComponent(0.4)
+        bottomFrameView.translatesAutoresizingMaskIntoConstraints = false
+        view.addSubview(bottomFrameView)
+
+        // Set up image view to fill in between the frames
         imageView = UIImageView(frame: view.bounds)
         imageView.contentMode = .scaleAspectFit
         view.addSubview(imageView)
+        view.sendSubviewToBack(imageView) // Keep image view behind other UI elements
 
-        // Set up capture button
-        captureButton = UIButton(type: .system)
-        captureButton.setTitle("Capture Depth", for: .normal)
-        captureButton.addTarget(self, action: #selector(startCapture), for: .touchUpInside)
+        // Set up capture button with a white background on the bottom frame
+        captureButton = UIButton(type: .custom)
+        captureButton.layer.cornerRadius = 35
+        captureButton.layer.borderWidth = 2
+        captureButton.layer.borderColor = UIColor.white.cgColor
+        captureButton.backgroundColor = .white.withAlphaComponent(0.8)
+        captureButton.setTitleColor(.black, for: .normal)
         captureButton.translatesAutoresizingMaskIntoConstraints = false
-        view.addSubview(captureButton)
+        captureButton.addTarget(self, action: #selector(startCapture), for: .touchUpInside)
+        bottomFrameView.addSubview(captureButton) // Add button to bottom frame view
 
+        // Set up the object name text field at the center of the top frame
+        objectNameTextField = UITextField()
+        objectNameTextField.placeholder = "Enter Object Name"
+        objectNameTextField.borderStyle = .roundedRect
+        objectNameTextField.backgroundColor = UIColor.darkGray.withAlphaComponent(0.8)
+        objectNameTextField.textColor = .white
+        objectNameTextField.textAlignment = .center
+        objectNameTextField.font = UIFont.systemFont(ofSize: 16)
+        objectNameTextField.translatesAutoresizingMaskIntoConstraints = false
+        topFrameView.addSubview(objectNameTextField) // Add text field to top frame view
+        
+        
+        // Share button
+        let shareButton = UIButton(type: .system)
+        var shareButtonConfig = UIButton.Configuration.filled()
+        shareButtonConfig.baseBackgroundColor = .systemGray5
+        shareButtonConfig.baseForegroundColor = .systemBlue
+        shareButtonConfig.cornerStyle = .capsule // Rounded style
+        shareButtonConfig.image = UIImage(systemName: "square.and.arrow.up") // Native share icon
+//        shareButtonConfig.title = "Share"
+//        shareButtonConfig.imagePadding = 8
+//        shareButtonConfig.imagePlacement = .leading
+        shareButton.configuration = shareButtonConfig
+        shareButton.translatesAutoresizingMaskIntoConstraints = false
+        shareButton.addTarget(self, action: #selector(shareFiles), for: .touchUpInside)
+        bottomFrameView.addSubview(shareButton)
+
+        // Set up layout constraints
         NSLayoutConstraint.activate([
-            captureButton.bottomAnchor.constraint(equalTo: view.safeAreaLayoutGuide.bottomAnchor, constant: -20),
-            captureButton.centerXAnchor.constraint(equalTo: view.centerXAnchor)
+            // Set up top frame
+            topFrameView.topAnchor.constraint(equalTo: view.topAnchor),
+            topFrameView.leadingAnchor.constraint(equalTo: view.leadingAnchor),
+            topFrameView.trailingAnchor.constraint(equalTo: view.trailingAnchor),
+            topFrameView.heightAnchor.constraint(equalToConstant: 100),
+
+            // Set up bottom frame
+            bottomFrameView.bottomAnchor.constraint(equalTo: view.bottomAnchor),
+            bottomFrameView.leadingAnchor.constraint(equalTo: view.leadingAnchor),
+            bottomFrameView.trailingAnchor.constraint(equalTo: view.trailingAnchor),
+            bottomFrameView.heightAnchor.constraint(equalToConstant: 120),
+
+            // Center the text field in the top frame
+            objectNameTextField.centerXAnchor.constraint(equalTo: topFrameView.centerXAnchor),
+            objectNameTextField.bottomAnchor.constraint(equalTo: topFrameView.bottomAnchor, constant: -10),
+            objectNameTextField.widthAnchor.constraint(equalToConstant: 200),
+            objectNameTextField.heightAnchor.constraint(equalToConstant: 30),
+
+            // Center capture button in the bottom frame
+            captureButton.centerXAnchor.constraint(equalTo: bottomFrameView.centerXAnchor),
+            captureButton.centerYAnchor.constraint(equalTo: bottomFrameView.centerYAnchor),
+            captureButton.widthAnchor.constraint(equalToConstant: 70),
+            captureButton.heightAnchor.constraint(equalToConstant: 70),
+            
+            
+            // Layout for share button
+            shareButton.centerXAnchor.constraint(equalTo: bottomFrameView.leftAnchor, constant: 70),
+            shareButton.centerYAnchor.constraint(equalTo: bottomFrameView.centerYAnchor),
+            shareButton.widthAnchor.constraint(equalToConstant: 40),
+            shareButton.heightAnchor.constraint(equalToConstant: 40),
+            
+            
+            
         ])
     }
+
 
     func checkPermissionsAndSetupSession() {
         switch AVCaptureDevice.authorizationStatus(for: .video) {
@@ -169,7 +243,7 @@ class ViewController: UIViewController, AVCapturePhotoCaptureDelegate, UITextFie
         } else {
             print("Depth data delivery is not enabled on this device.")
         }
-
+    
         // Capture the photo
         photoOutput.capturePhoto(with: photoSettings, delegate: self)
     }
@@ -179,15 +253,22 @@ class ViewController: UIViewController, AVCapturePhotoCaptureDelegate, UITextFie
             print("Error capturing photo: \(String(describing: error))")
             return
         }
+                
+        // Capture current orientation and acceleration
+        let orientationData = cameraMotion.getRelativeOrientation()
+        let accelerationData = cameraMotion.getRelativeAcceleration()
+        let motionMetadata = MotionMetadata(orientationData: orientationData,
+                                            accelerationData: accelerationData)
         
-        captureCounter += 1
-        
-        let cameraCaptureData = createCameraCapturedData(pixelBuffer: pixelBuffer, depthData: depthData)
+        let cameraCaptureData = createCameraCapturedData(pixelBuffer: pixelBuffer,
+                                                         depthData: depthData,
+                                                         motionMetadata: motionMetadata)
         
         // Define folder path and prefix
         let objectName = objectNameTextField.text?.isEmpty == true ? "DefaultObject" : objectNameTextField.text!
         let filePath = getObjectFolderPath(folderName: objectName)
-        let prefix = "fram_\(captureCounter)"
+        let timestamp = Int(Date().timeIntervalSince1970)
+        let prefix = "frame_\(timestamp)"
         cameraCapturedDataSaver.save(data: cameraCaptureData, to: filePath, withPrefix: prefix)
         
         
@@ -205,7 +286,9 @@ class ViewController: UIViewController, AVCapturePhotoCaptureDelegate, UITextFie
 //        imageView.image = combinedImage?.withOrientation(.right)
     }
 
-    private func createCameraCapturedData(pixelBuffer: CVPixelBuffer, depthData: AVDepthData) -> CameraCapturedData {
+    private func createCameraCapturedData(pixelBuffer: CVPixelBuffer,
+                                          depthData: AVDepthData,
+                                          motionMetadata: MotionMetadata) -> CameraCapturedData {
         
         let ciImage = CIImage(cvPixelBuffer: pixelBuffer)
         let colorImage = UIImage(ciImage: ciImage)
@@ -254,7 +337,8 @@ class ViewController: UIViewController, AVCapturePhotoCaptureDelegate, UITextFie
         let cameraCalibrationData = depthData.cameraCalibrationData!
         
         let data = CameraCapturedData(colorImage: colorImage.withOrientation(.right),
-                                      depthImage: UIImage(cgImage: cgDepthImage).withOrientation(.right),
+                                      depthImage: UIImage(cgImage: cgDepthImage),
+                                      motionMetadta: motionMetadata,
                                       minDepth: minDepth,
                                       maxDepth: maxDepth,
                                       cameraIntrinsics: cameraCalibrationData.intrinsicMatrix,
@@ -309,5 +393,25 @@ class ViewController: UIViewController, AVCapturePhotoCaptureDelegate, UITextFie
     func textFieldShouldReturn(_ textField: UITextField) -> Bool {
         textField.resignFirstResponder()
         return true
+    }
+    
+    
+    @objc func shareFiles() {
+        // Get object name from text field or use default
+        let objectName = objectNameTextField.text?.isEmpty == true ? "DefaultObject" : objectNameTextField.text!
+        let folderPath = getObjectFolderPath(folderName: objectName)
+        
+        do {
+            // Retrieve all file URLs in the object folder
+            let fileURLs = try FileManager.default.contentsOfDirectory(at: folderPath, includingPropertiesForKeys: nil)
+            
+            // Initialize activity view controller with files
+            let activityVC = UIActivityViewController(activityItems: fileURLs, applicationActivities: nil)
+            activityVC.popoverPresentationController?.sourceView = self.view // for iPad compatibility
+            present(activityVC, animated: true, completion: nil)
+            
+        } catch {
+            print("Failed to retrieve files for sharing: \(error)")
+        }
     }
 }
